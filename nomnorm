@@ -1,0 +1,73 @@
+#!/usr/bin/python3.11
+
+import sys
+import argparse
+from datetime import datetime
+from pathlib import Path
+import configparser
+
+class Constants:
+    progname = "nomnorm"
+    version = "0.1"
+    config_file_path = Path.home() / ".config" / progname / "config.ini"
+
+class ConfigFile:
+    path: Path = Constants.config_file_path
+
+    @classmethod
+    def load_config(cls) -> configparser.ConfigParser:
+        # Check if the config file exists
+        if not cls.path.exists():
+            print(f"Generating default config file at {cls.path}")
+            cls.generate_default_config()
+
+        # Load the config file using configparser
+        config = configparser.ConfigParser()
+        print(f"Loading config file from {cls.path}")
+        config.read(cls.path)
+
+        return config
+
+    @classmethod
+    def regenerate_config(cls) -> configparser.ConfigParser:
+        cls.rename_config_to_backup()
+        return cls.load_config()
+
+    @classmethod
+    def generate_default_config(cls) -> None:
+        # Create a ConfigParser instance with default settings
+        config = configparser.ConfigParser()
+        config["SectionName"] = {
+            "Key": "DefaultValue",
+        }
+
+        cls.path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write the default config to the file
+        with cls.path.open(mode='w') as config_file:
+            config.write(config_file)
+
+    @classmethod
+    def rename_config_to_backup(cls) -> None:
+        # Ensure the path exists
+        if not cls.path.exists():
+            print(f"Note: Prior config {cls.path} does not exist; skipping backup")
+            return
+
+        # Get the last modification time of the file
+        mtime = cls.path.stat().st_mtime
+        timestamp = datetime.utcfromtimestamp(mtime).strftime("%Y%m%dT%H%M%S")
+
+        # Rename the file
+        new_path = cls.path.with_name(f"{cls.path.stem}.old.{timestamp}{cls.path.suffix}")
+        cls.path.rename(new_path)
+
+        print(f"Config file renamed to: {new_path}")
+
+def main():
+    config = ConfigFile.regenerate_config()
+    config.write(sys.stdout)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
