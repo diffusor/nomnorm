@@ -18,7 +18,24 @@ class Constants:
 default_profile = "default"
 
 [default]
-key1 = "value1"
+# Relative or absolute path to the directory containing files to rename
+target = "."
+
+# Name of file containing the final filenames
+filename_file = "normative_file_names.txt"
+
+# Filename correlation pattern regex.
+#
+# This regex is matched against each final filename to extract a substring
+# used to find the file in the target directory that should be renamed to that
+# final filename.
+#
+# Default correlation is for YYYYMMDD-HHmmss timestamps
+correlation_regex = '\d{{8}}-\d{{6}}'
+
+# Correlation substring replacement.
+# If specified, the first matching pattern will be used in a regex substition
+# to generate the final filename??? Whoops wrong way.
 """
 
 class ConfigFile:
@@ -66,6 +83,7 @@ class ConfigFile:
 def main():
     config = ConfigFile.regenerate_config()
     print(config)
+    #print(config["default"]["correlation_regex"])
     return 0
 
 if __name__ == "__main__":
