@@ -24,7 +24,7 @@ target = "."
 # Name of file containing the final filenames
 filename_file = "normative_file_names.txt"
 
-# Filename correlation pattern regex.
+# Filename correlation pattern Python regex.
 #
 # This regex is matched against each final filename to extract a substring
 # used to find the file in the target directory that should be renamed to that
@@ -33,9 +33,23 @@ filename_file = "normative_file_names.txt"
 # Default correlation is for YYYYMMDD-HHmmss timestamps
 correlation_regex = '\d{{8}}-\d{{6}}'
 
-# Correlation substring replacement.
-# If specified, the first matching pattern will be used in a regex substition
-# to generate the final filename??? Whoops wrong way.
+# Keep the filename suffix part matching this Python regex when renaming each file
+keep_suffix_regex = '(_\d+x\d+)\.(m4a|mp4|txt)'
+
+# Suffix replacement pattern for transforming the string matched by the
+# keep_suffix_regex pattern.
+# This can use standard Python replacement syntax.
+# The default of \g<0> specifies replacement of the entire match.
+#
+# \\1 .. \\9 and beyond specify numbered capture group.
+# Use \g<1> .. \g<9> or beyond to avoid ambiguity with other escapes.
+# \g<name> matches named capture group (?P<name>).
+# Use (?:...) in the regex to specify a non-capturing group.
+replacement_suffix = '\g<0>'
+
+# When true, the script uses the parsed timestamp as a GMT timestamp, and
+# updates the file's last-update (modification) time to match.
+set_file_mtime = true
 """
 
 class ConfigFile:
