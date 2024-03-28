@@ -12,7 +12,7 @@ from pathlib import Path
 
 class Constants:
     progname = "nomnorm"
-    version = "0.1"
+    version = "0.2"
     config_file = f"{progname}.config.toml"
     config_file_path = Path.home() / ".config" / progname / config_file
     dir_config = f".{config_file}"
@@ -105,51 +105,72 @@ class GetAttrDict(dict):
         else:
             return struct
 
+def update_recursive(struct, overrides):
+    """\
+    When struct is a dict, we can recurse into it and set keys.
+    In this case, overrides must also be a dict - it structure must
+    match.  We iterate only over the keys in overrides to do the
+    replacements.
+
+    If struct[k] exists, we need to recurse into it.
+    Otherwise, we just set struct[k] = v
+    """
+    if isinstance(struct, dict):
+        for k, v in overrides.items():
+            # If k not in struct, we'll call update_recursive(None, v) which returns v
+            struct[k] = update_recursive(struct.get(k), v)
+    else:
+        # Completely replace the struct if it's not a dict to recurse into
+        struct = overrides
+    return struct
+
 class ConfigFile:
     """Class for managing toml configs files.
 
     The loaded config is in the config data member, with all dicts replaced
     with GetAttrDict instances.
     """
-    def __init__(self, path: Path|str, default: str=""):
-        self.path = path
+    def __init__(self, default: str="") -> None:
         self.default = default
-        self.config = None
+        self.config: GetAttrDict = GetAttrDict()
 
-    def load_file(self) -> object:
-        """Loads the config.  If the file doesn't exist, it's written first."""
-        if not self.path.exists():
-            print(f"Generating default config file at {self.path}")
-            with self.path.open(mode='w') as f:
-                f.write(self.default)
-
-        print(f"Loading config file from {self.path}")
-        with self.path.open("rb") as f:
-            self.config = GetAttrDict.attrify(tomllib.load(f))
+    def load_file(self, path: Path|str) -> None:
+        """Loads a config from the path overriding anything in the current config."""
+        with open(path, "rb") as f:
+            overrides = GetAttrDict.attrify(tomllib.load(f))
+        self.config = update_recursive(self.config, overrides)
 
     def load_default(self) -> object:
         """Just load the default config, don't mess with the config file"""
         self.config = GetAttrDict.attrify(tomllib.loads(self.default))
 
-    def regenerate_config(self) -> object:
-        self.rename_config_to_backup()
-        self.load_file()
+    def regenerate_config(self, path) -> object:
+        self.rename_config_to_backup(path)
+        self.write_default_config(path)
 
-    def rename_config_to_backup(self) -> None:
-        # Ensure the path exists
-        if not self.path.exists():
-            print(f"Note: Prior config {self.path} does not exist; skipping backup")
+    @staticmethod
+    def rename_config_to_backup(path: Path|str) -> None:
+        path = Path(path)
+        if not path.exists():
             return
 
         # Get the last modification time of the file
-        mtime = self.path.stat().st_mtime
+        mtime = path.stat().st_mtime
         timestamp = datetime.utcfromtimestamp(mtime).strftime("%Y%m%dT%H%M%S")
 
         # Rename the file
-        new_path = self.path.with_name(f"{self.path.stem}.old.{timestamp}{self.path.suffix}")
-        self.path.rename(new_path)
+        new_path = path.with_name(f"{path.stem}.old.{timestamp}{path.suffix}")
+        path.rename(new_path)
 
-        print(f"Config file renamed to: {new_path}")
+        print(f"Previous config file backed up to: {new_path}")
+
+    def write_default_config(self, path: str|Path) -> object:
+        with open(path, mode='x') as f:
+            f.write(self.default)
+
+    def print(self):
+        """Prints the config as json for debug"""
+        json.dump(self.config, sys.stdout, indent=1)
 
 def process_command_line() -> argparse.Namespace:
     """Load the command line options"""
@@ -160,27 +181,58 @@ def process_command_line() -> argparse.Namespace:
         epilog="",
     )
     parser.add_argument('dir', nargs="?", default=".", help="directory of files to process")
-    parser.add_argument('-p', '--profile',
-                        help="the profile to select form the config file; overrides config")
-    parser.add_argument('-c', '--config', default=Constants.config_file_path,
+    parser.add_argument('-c', '--config',
                         help=f"""main .toml config file to load.
                         Set to - to avoid loading any main config.
                         default: {Constants.config_file_path}""")
     parser.add_argument('-d', '--dir-config', default=Constants.dir_config,
                         help=f"""file name of the override config file to load from the dir.
                         Set to - to avoid loading any config from the target dir.""")
-    parser.add_argument('-s', '--stubs-file', help="file of cononical stub names")
+    parser.add_argument('-p', '--profile',
+                        help="""the profile to select form the config file.
+                        This overrides both the --config file and the --dir-config.""")
+    parser.add_argument('-s', '--stubs-file',
+                        help="""filename of the cononical stub names used for renaming.
+                        If this contains no path separators, it's resolved in the target dir.
+                        Otherwise, it's resolved relative to the cwd.""")
+    parser.add_argument('-w', '--write-config', action='store_true',
+                        help=f"""write the default config contents to the selected
+                        --config file, which may be the default, and exit""")
     return parser.parse_args()
 
 def main():
     #config = ConfigFile.regenerate_config()
     opts = process_command_line()
-    print(opts)
-    return 0
-    cf = ConfigFile(Constants.config_file_path, default=Constants.default_config)
-    cf.load_file()
-    json.dump(cf.config, sys.stdout, indent=1)
-    print(cf.config.default.file_subs[1].pat)
+    cf = ConfigFile(default=Constants.default_config)
+
+    if opts.write_config:
+        cfile = opts.config or Constants.config_file_path
+        if cfile == "-":
+            print("Error: refusing to write to config file named '-'")
+            return 2
+        else:
+            cf.regenerate_config(cfile)
+            return 0
+
+    # Load the main config file
+    if not opts.config:
+        if Constants.config_file_path.exists():
+            cf.load_file(Constants.config_file_path)
+        else:
+            cf.load_default()
+
+    elif opts.config != "-":
+        cf.load_file(opts.config)
+
+    # Load the sub-config file from the target dir
+    subconfig = Path(opts.dir) / opts.dir_config
+    if subconfig.exists():
+        cf.load_file(subconfig)
+
+    cf.print()
+
+    # TODO implement opts.profile and opts.stubs_file
+
     return 0
 
 if __name__ == "__main__":
