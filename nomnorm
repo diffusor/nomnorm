@@ -1,5 +1,7 @@
 #!/usr/bin/python3.11
 
+from __future__ import annotations
+
 import sys
 import argparse
 import tomllib
@@ -11,41 +13,71 @@ class Constants:
     version = "0.1"
     config_file_path = Path.home() / ".config" / progname / "config.toml"
 
-    default_config: str = f"""# {progname} configuration toml file
+    default_config: str = f"""\
+# {progname} configuration toml file
 #
 # First generated {datetime.now()} by {progname} version {version}
 # For information on toml syntax, see https://toml.io/en/
-default_profile = "default"
+""" """\
+profile = "default"
 
 [default]
 # Relative or absolute path to the directory containing files to rename
 target = "."
 
-# Name of file containing the final filenames
-filename_file = "normative_file_names.txt"
+# Name of file containing the final filename stubs
+stubs_file = "filename_stubs.txt"
 
-# Filename correlation pattern Python regex.
-#
-# This regex is matched against each final filename to extract a substring
-# used to find the file in the target directory that should be renamed to that
-# final filename.
-#
-# Default correlation is for YYYYMMDD-HHmmss timestamps
-correlation_regex = '\d{{8}}-\d{{6}}'
+# match_groups is a table specifying groups common to many of the file_subs
+# and/or the stub_pattern. Each pattern is formatted by calling
+# .format(**match_groups) on it to replace instance of {groupname} in the
+# pattern with the value of match_groups.groupname in this table.
+match_groups.key = '\d{8}-\d{6}'
+match_groups.resmp4 = '\d+x\d+\.mp4'
 
-# Keep the filename suffix part matching this Python regex when renaming each file
-keep_suffix_regex = '(_\d+x\d+)\.(m4a|mp4|txt)'
-
-# Suffix replacement pattern for transforming the string matched by the
-# keep_suffix_regex pattern.
-# This can use standard Python replacement syntax.
-# The default of \g<0> specifies replacement of the entire match.
+# stub_pattern is used to extract the key and replacement text from the
+# filename stubs in stubs_file.
 #
-# \\1 .. \\9 and beyond specify numbered capture group.
-# Use \g<1> .. \g<9> or beyond to avoid ambiguity with other escapes.
-# \g<name> matches named capture group (?P<name>).
-# Use (?:...) in the regex to specify a non-capturing group.
-replacement_suffix = '\g<0>'
+# The pattern must contain a group named 'key', which is used as a hash key in
+# the dict for looking up which replacement to use for each file matched by
+# patterns in the src_pattern array.
+#
+# The entire text of the matched stub is passed as a keyword parameter named
+# 'stub' to the format call for renaming the src files, so the pattern need
+# not match more than the key group in the pattern.
+#
+# The pattern text can contain named match groups.  These are passed as
+# keyword arguments to format the replacement text.
+stub_pattern = 'zoom[._]{key}(GMT|Z)\..*'
+
+# file_subs is a list of inline dicts, each with two keys:
+#
+# * pat - regex pattern used to match each filename; must contain the 'key' named group
+#   Each pattern has .format() called on it with keywords from match_groups
+#   and 'stub_pattern' defined.  The values of match_groups are substituted
+#   directly, but the stub_pattern is first itself formatted using the
+#   match_groups. To use {} range matching, you will need to double the braces
+#   to avoid the format expansion like {{ }}.
+#
+# * rep - replacement template.  This can contain back-references as well as
+#   {} format interpolation parts, since .format() is called on this string
+#   with the following keyword parameters:
+#   - 'stub' - the text of the filename stub this filename's key matched in the stubs_file
+#   - any of the named groups matched from the stub_pattern
+#
+# For each file, each pattern in this list is tried in order - the first one
+# that matches is applied to determine how to match the key and rename the file.
+#
+# TODO - we could another entry called 'key' that specifies how to form the
+# key from the given pattern, allowing key renaming.
+file_subs = [
+  { pat='{stub_pattern}[_.]{resmp4}', rep='{stub}.\g<resmp4>' },
+  { pat='{stub_pattern}[_.]?(new)?[Cc]hat\.txt', rep='{stub}.chat.txt' },
+  { pat='{stub_pattern}\.m4a', rep='{stub}.m4a' },
+  { pat='GMT{key}_Recording_{resmp4}', rep='{stub}.\g<resmp4>' },
+  { pat='GMT{key}_RecordingnewChat.txt', rep='{stub}.chat.txt' },
+  { pat='GMT{key}_Recording.m4a', rep='{stub}.m4a' },
+]
 
 # When true, the script uses the parsed timestamp as a GMT timestamp, and
 # updates the file's last-update (modification) time to match.
@@ -93,6 +125,9 @@ class ConfigFile:
         cls.path.rename(new_path)
 
         print(f"Config file renamed to: {new_path}")
+
+def process_command_line() -> argparse.Namespace:
+    """Load the command line options"""
 
 def main():
     config = ConfigFile.regenerate_config()
