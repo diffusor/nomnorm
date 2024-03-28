@@ -1,4 +1,5 @@
 #!/usr/bin/python3.11
+"""Renames files in a directory according to a file of canonical file name stubs."""
 
 from __future__ import annotations
 
@@ -12,7 +13,9 @@ from pathlib import Path
 class Constants:
     progname = "nomnorm"
     version = "0.1"
-    config_file_path = Path.home() / ".config" / progname / f"{progname}.config.toml"
+    config_file = f"{progname}.config.toml"
+    config_file_path = Path.home() / ".config" / progname / config_file
+    dir_config = f".{config_file}"
 
     default_config: str = f"""\
 # {progname} configuration toml file
@@ -150,11 +153,31 @@ class ConfigFile:
 
 def process_command_line() -> argparse.Namespace:
     """Load the command line options"""
+    parser = argparse.ArgumentParser(
+        prog=Constants.progname,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=__doc__,
+        epilog="",
+    )
+    parser.add_argument('dir', nargs="?", default=".", help="directory of files to process")
+    parser.add_argument('-p', '--profile',
+                        help="the profile to select form the config file; overrides config")
+    parser.add_argument('-c', '--config', default=Constants.config_file_path,
+                        help=f"""main .toml config file to load.
+                        Set to - to avoid loading any main config.
+                        default: {Constants.config_file_path}""")
+    parser.add_argument('-d', '--dir-config', default=Constants.dir_config,
+                        help=f"""file name of the override config file to load from the dir.
+                        Set to - to avoid loading any config from the target dir.""")
+    parser.add_argument('-s', '--stubs-file', help="file of cononical stub names")
+    return parser.parse_args()
 
 def main():
     #config = ConfigFile.regenerate_config()
-    cf = ConfigFile(Constants.config_file_path,
-                    default=Constants.default_config)
+    opts = process_command_line()
+    print(opts)
+    return 0
+    cf = ConfigFile(Constants.config_file_path, default=Constants.default_config)
     cf.load_file()
     json.dump(cf.config, sys.stdout, indent=1)
     print(cf.config.default.file_subs[1].pat)
