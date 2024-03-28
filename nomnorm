@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import argparse
 import tomllib
 from datetime import datetime
@@ -84,45 +85,66 @@ file_subs = [
 set_file_mtime = true
 """
 
+class GetAttrDict(dict):
+    def __getattr__(self, key): return self[key]
+
+    @staticmethod
+    def attrify(struct: list|dict|Any) -> list|GetAttrDict|Any:
+        """Walks the given list/dict struct and returns a GetAttrDict-ified one.
+
+        The returned struct is identical except all dict-like instances are
+        replaced with new shallow copies as GetAttrDict instances.
+        """
+        if isinstance(struct, dict):
+            return GetAttrDict((k, GetAttrDict.attrify(v)) for k, v in struct.items())
+        elif isinstance(struct, list):
+            return [GetAttrDict.attrify(e) for e in struct]
+        else:
+            return struct
+
 class ConfigFile:
-    path: Path = Constants.config_file_path
+    """Class for managing toml configs files.
 
-    @classmethod
-    def load_config(cls) -> object:
-        # Check if the config file exists
-        if not cls.path.exists():
-            print(f"Generating default config file at {cls.path}")
-            with cls.path.open(mode='w') as f:
-                f.write(Constants.default_config)
+    The loaded config is in the config data member, with all dicts replaced
+    with GetAttrDict instances.
+    """
+    def __init__(self, path: Path|str, default: str=""):
+        self.path = path
+        self.default = default
+        self.config = None
 
-        print(f"Loading config file from {cls.path}")
-        with cls.path.open("rb") as f:
-            return tomllib.load(f)
+    def load_file(self) -> object:
+        """Loads the config.  If the file doesn't exist, it's written first."""
+        if not self.path.exists():
+            print(f"Generating default config file at {self.path}")
+            with self.path.open(mode='w') as f:
+                f.write(self.default)
 
-    @classmethod
-    def skip_config_file(cls) -> object:
+        print(f"Loading config file from {self.path}")
+        with self.path.open("rb") as f:
+            self.config = GetAttrDict.attrify(tomllib.load(f))
+
+    def load_default(self) -> object:
         """Just load the default config, don't mess with the config file"""
-        tomllib.loads(Constants.default_config)
+        self.config = GetAttrDict.attrify(tomllib.loads(self.default))
 
-    @classmethod
-    def regenerate_config(cls) -> object:
-        cls.rename_config_to_backup()
-        return cls.load_config()
+    def regenerate_config(self) -> object:
+        self.rename_config_to_backup()
+        self.load_file()
 
-    @classmethod
-    def rename_config_to_backup(cls) -> None:
+    def rename_config_to_backup(self) -> None:
         # Ensure the path exists
-        if not cls.path.exists():
-            print(f"Note: Prior config {cls.path} does not exist; skipping backup")
+        if not self.path.exists():
+            print(f"Note: Prior config {self.path} does not exist; skipping backup")
             return
 
         # Get the last modification time of the file
-        mtime = cls.path.stat().st_mtime
+        mtime = self.path.stat().st_mtime
         timestamp = datetime.utcfromtimestamp(mtime).strftime("%Y%m%dT%H%M%S")
 
         # Rename the file
-        new_path = cls.path.with_name(f"{cls.path.stem}.old.{timestamp}{cls.path.suffix}")
-        cls.path.rename(new_path)
+        new_path = self.path.with_name(f"{self.path.stem}.old.{timestamp}{self.path.suffix}")
+        self.path.rename(new_path)
 
         print(f"Config file renamed to: {new_path}")
 
@@ -130,9 +152,12 @@ def process_command_line() -> argparse.Namespace:
     """Load the command line options"""
 
 def main():
-    config = ConfigFile.regenerate_config()
-    print(config)
-    #print(config["default"]["correlation_regex"])
+    #config = ConfigFile.regenerate_config()
+    cf = ConfigFile(Constants.config_file_path,
+                    default=Constants.default_config)
+    cf.load_file()
+    json.dump(cf.config, sys.stdout, indent=1)
+    print(cf.config.default.file_subs[1].pat)
     return 0
 
 if __name__ == "__main__":
