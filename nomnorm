@@ -11,7 +11,7 @@ from pathlib import Path
 class Constants:
     progname = "nomnorm"
     version = "0.1"
-    config_file_path = Path.home() / ".config" / progname / "config.toml"
+    config_file_path = Path.home() / ".config" / progname / f"{progname}.config.toml"
 
     default_config: str = f"""\
 # {progname} configuration toml file
