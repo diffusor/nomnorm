@@ -1,5 +1,19 @@
 #!/usr/bin/python3.11
-"""Renames files in a directory according to a file of canonical file name stubs."""
+"""Normalize names of files.
+
+Renames files in a directory according to a file of canonical file name stubs."""
+
+# TODO mtime setting, actual renaming, prompt user to continue
+# os.utime(path, times=(atime=time.time(), mtime=strptime(key, timefmt)))
+# os.path.getmtime(path) -> float seconds
+#
+# t = datetime.datetime.strptime("20200830-195934", "%Y%m%d-%H%M%S")
+# utc = t.replace(tzinfo=datetime.timezone.utc)
+# utc.timestamp()
+#
+# Check that it's within 3 seconds - if so, no need to set it.
+# Create dataclass for the file update operations needed.
+# Need new config option for time format parsing via strptime
 
 from __future__ import annotations
 
@@ -9,8 +23,9 @@ import sys
 import json
 import tomllib
 import argparse
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
+from dataclasses import dataclass
 
 class Constants:
     progname = "nomnorm"
@@ -18,6 +33,8 @@ class Constants:
     config_file = f"{progname}.config.toml"
     config_file_path = Path.home() / ".config" / progname / config_file
     dir_config = f".{config_file}"
+    # if the file mtime is outside this epsilon, we fix it
+    mtime_epsilon_seconds = 3
 
     default_config: str = f"""\
 # {progname} configuration toml file
@@ -86,7 +103,16 @@ file_subs = [
 
 # When true, the script uses the parsed timestamp as a GMT timestamp, and
 # updates the file's last-update (modification) time to match.
-set_file_mtime = true
+mtime.enable = true
+
+# {}-style format string from which the time will be parsed.
+# This can use the match groups from pat entries in the file_subs list,
+# as long as the group is present across all pat entries in file_subs; and
+# from stub_pattern.  Groups in stub_pattern override those in file_subs.
+mtime.source = "{key}"
+
+# strftime-style interpolation string for strptime parsing
+mtime.strpfmt = "%Y%m%d-%H%M%S"
 """
 
 class GetAttrDict(dict):
@@ -173,12 +199,20 @@ class ConfigFile:
         """Prints the config as json for debug"""
         json.dump(self.config, sys.stdout, indent=1)
 
+@dataclass
+class FileInfo:
+    source: str
+    dest: str
+    dest_exists: bool
+    mtime: int|float|None = None
+
 def process_dir(dir: str|Path,
                 act: bool,
                 stubs_file: str,
                 set_file_mtime: bool,
                 stub_pattern: str,
                 file_subs: list[dict[str, str]],
+                mtime: GetAttrDict|None=None,
                 match_groups: GetAttrDict|None=None):
     """Renames files in dir according to the given config."""
     dir = Path(dir)
@@ -210,9 +244,8 @@ def process_dir(dir: str|Path,
     # scan the files
     unmatched_files = []
     used_keys = set()
-    renames = {}
+    renames: list[FileInfo] = []
     conflicts = set()
-    retime_map = {} # newname to mtime map
     for fname in sorted(os.listdir(dir)):
         # fname is just the basename, dir is not prepended
         # Try to match each file_subs pattern to set up the rename
@@ -222,11 +255,13 @@ def process_dir(dir: str|Path,
                     used_keys.add(stub)
                     newname = m.re.sub(s.rep.format(stub=stub), m.string)
                     if newname != fname:
-                        renames[fname] = newname
-                        if (dir / newname).exists():
+                        renames.append(fileinfo := FileInfo(
+                            source=fname,
+                            dest=newname,
+                            dest_exists=(dir / newname).exists(),
+                            mtime=os.path.getmtime(dir / fname)))
+                        if fileinfo.dest_exists:
                             conflicts.add(fname)
-                    # TODO also check each file for proper mtime
-                    # print(f"""{fname}\n  ->  {newname}""")
                     break
         else:
             unmatched_files.append(fname)
@@ -241,9 +276,10 @@ def process_dir(dir: str|Path,
     summary = (f"{len(renames)} rename(s), {len(conflicts)} conflict(s),"
                f" {len(unused_keys)} unused stub(s), {len(unmatched_files)} unmatched file(s)")
     print(summary)
-    for old, new in renames.items():
-        msg = "[target exists] " if old in conflicts else ""
-        print(f"{msg}{old}  ->  {new}")
+    for fileinfo in renames:
+        #msg = "[target exists] " if fileinfo.dest_exists else ""
+        #print(f"{msg}{old}  ->  {new}")
+        print(fileinfo)
 
     if act:
         pass
