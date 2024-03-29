@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import re
+import os
 import sys
 import json
-import argparse
 import tomllib
+import argparse
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +35,8 @@ stubs_file = "filename_stubs.txt"
 # and/or the stub_pattern. Each pattern is formatted by calling
 # .format(**match_groups) on it to replace instance of {groupname} in the
 # pattern with the value of match_groups.groupname in this table.
+# However, first, each substitution is wrapped with the name of the key, so
+# each resulting group match pattern is a named group.
 match_groups.key = '\d{8}-\d{6}'
 match_groups.resmp4 = '\d+x\d+\.mp4'
 
@@ -49,7 +53,7 @@ match_groups.resmp4 = '\d+x\d+\.mp4'
 #
 # The pattern text can contain named match groups.  These are passed as
 # keyword arguments to format the replacement text.
-stub_pattern = 'zoom[._]{key}(GMT|Z)\..*'
+stub_pattern = 'zoom[._]{key}(GMT|Z).*'
 
 # file_subs is a list of inline dicts, each with two keys:
 #
@@ -73,10 +77,10 @@ stub_pattern = 'zoom[._]{key}(GMT|Z)\..*'
 # key from the given pattern, allowing key renaming.
 file_subs = [
   { pat='{stub_pattern}[_.]{resmp4}', rep='{stub}.\g<resmp4>' },
-  { pat='{stub_pattern}[_.]?(new)?[Cc]hat\.txt', rep='{stub}.chat.txt' },
+  { pat='{stub_pattern}[_.]?(newChat)?\.txt', rep='{stub}.chat.txt' },
   { pat='{stub_pattern}\.m4a', rep='{stub}.m4a' },
   { pat='GMT{key}_Recording_{resmp4}', rep='{stub}.\g<resmp4>' },
-  { pat='GMT{key}_RecordingnewChat.txt', rep='{stub}.chat.txt' },
+  { pat='GMT{key}_Recording(newChat)?.txt', rep='{stub}.chat.txt' },
   { pat='GMT{key}_Recording.m4a', rep='{stub}.m4a' },
 ]
 
@@ -169,6 +173,110 @@ class ConfigFile:
         """Prints the config as json for debug"""
         json.dump(self.config, sys.stdout, indent=1)
 
+def process_dir(dir: str|Path,
+                act: bool,
+                stubs_file: str,
+                set_file_mtime: bool,
+                stub_pattern: str,
+                file_subs: list[dict[str, str]],
+                match_groups: GetAttrDict|None=None):
+    """Renames files in dir according to the given config."""
+    dir = Path(dir)
+    if "/" in stubs_file or "\\" in stubs_file:
+        stubs_file = Path(stubs_file)
+    else:
+        stubs_file = dir / stubs_file
+
+    with stubs_file.open("r") as f:
+        stubs = [name for name in (line.strip() for line in f)
+                 if name and not name.startswith("#")]
+
+    group_kwargs = {k: f"(?P<{k}>{v})" for k, v in match_groups.items()}
+
+    # Compile the regexes
+    stub_pat_expanded = stub_pattern.format(**group_kwargs)
+    stub_match = re.compile(stub_pat_expanded).match
+    for d in file_subs:
+        d['match'] = re.compile(d.pat.format(stub_pattern=stub_pat_expanded,
+                                             **group_kwargs)).match
+
+    # create the key dict, mapping key to stub
+    key_stub_map = {}
+    for stub in stubs:
+        if m := stub_match(stub):
+            key_stub_map[m['key']] = stub
+    #for key in sorted(unused_keys): print(" ", key_stub_map[key])
+
+    # scan the files
+    unmatched_files = []
+    used_keys = set()
+    renames = {}
+    conflicts = set()
+    retime_map = {} # newname to mtime map
+    for fname in sorted(os.listdir(dir)):
+        # fname is just the basename, dir is not prepended
+        # Try to match each file_subs pattern to set up the rename
+        for s in file_subs:
+            if m := s.match(fname):
+                if stub := key_stub_map.get(m['key']):
+                    used_keys.add(stub)
+                    newname = m.re.sub(s.rep.format(stub=stub), m.string)
+                    if newname != fname:
+                        renames[fname] = newname
+                        if (dir / newname).exists():
+                            conflicts.add(fname)
+                    # TODO also check each file for proper mtime
+                    # print(f"""{fname}\n  ->  {newname}""")
+                    break
+        else:
+            unmatched_files.append(fname)
+
+    # Explain what we're going to do
+    if unmatched_files:
+        print(f"> Unmatched files:")
+        for file in unmatched_files:
+            print(" ", file)
+
+    unused_keys = set(key_stub_map) - used_keys
+    summary = (f"{len(renames)} rename(s), {len(conflicts)} conflict(s),"
+               f" {len(unused_keys)} unused stub(s), {len(unmatched_files)} unmatched file(s)")
+    print(summary)
+    for old, new in renames.items():
+        msg = "[target exists] " if old in conflicts else ""
+        print(f"{msg}{old}  ->  {new}")
+
+    if act:
+        pass
+
+    print(summary)
+
+def extract_profile(cf: GetAttrDict, opts: argparse.ArgumentParser) -> GetAttrDict:
+    # Load the main config file
+    if not opts.config:
+        if Constants.config_file_path.exists():
+            cf.load_file(Constants.config_file_path)
+        else:
+            cf.load_default()
+
+    elif opts.config != "-":
+        cf.load_file(opts.config)
+
+    # Load the sub-config file from the target dir
+    subconfig = Path(opts.dir) / opts.dir_config
+    if subconfig.exists():
+        cf.load_file(subconfig)
+
+    # Set opts.profile from the config if --profile wasn't on the command line
+    if opts.profile is None:
+        opts.profile = cf.config.profile
+
+    # Extract the selected config profile and override its stubs_file if requested
+    profile = cf.config[opts.profile]
+    if opts.stubs_file is not None:
+        profile["stubs_file"] = opts.stubs_file
+
+    return profile
+
 def process_command_line() -> argparse.Namespace:
     """Load the command line options"""
     parser = argparse.ArgumentParser(
@@ -194,7 +302,10 @@ def process_command_line() -> argparse.Namespace:
                         help="""filename of the cononical stub names used for renaming.
                         If this contains no path separators, it's resolved in the target dir.
                         Otherwise, it's resolved relative to the cwd.
+                        To use a file named filename in the current dir, specify ./filename.
                         Defaults to the stubs_file setting in the config.""")
+    parser.add_argument('-n', '--no-act', action='store_true',
+                        help="don't rename any files, just print what we would have done")
     parser.add_argument('-w', '--write-config', action='store_true',
                         help=f"""write the default config contents to the selected
                         --config file, which may be the default, and exit""")
@@ -214,31 +325,8 @@ def main():
             cf.regenerate_config(cfile)
             return 0
 
-    # Load the main config file
-    if not opts.config:
-        if Constants.config_file_path.exists():
-            cf.load_file(Constants.config_file_path)
-        else:
-            cf.load_default()
-
-    elif opts.config != "-":
-        cf.load_file(opts.config)
-
-    # Load the sub-config file from the target dir
-    subconfig = Path(opts.dir) / opts.dir_config
-    if subconfig.exists():
-        cf.load_file(subconfig)
-
-    # Set opts.profile from the config if --profile wasn't on the command line
-    if opts.profile is None:
-        opts.profile = cf.config.profile
-
-    # Extract the selected config profile and override its stubs_file if requested
-    profile = cf.config[opts.profile]
-    if opts.stubs_file is not None:
-        profile.stubs_file = opts.stubs_file
-
-    return 0
+    profile = extract_profile(cf, opts)
+    return process_dir(opts.dir, act=not opts.no_act, **profile)
 
 if __name__ == "__main__":
     sys.exit(main())
