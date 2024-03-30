@@ -335,16 +335,12 @@ def process_renames_and_mtimes(dir: Path|str, renames: list[FileInfo]) -> None:
 
 def process_dir(dir: str|Path,
                 act: bool,
-                stubs_file: str,
-                stub_pattern: str,
-                file_subs: list[dict[str, str]],
-                mtime: GetAttrDict|None=None,
-                match_groups: GetAttrDict|None=None):
+                cfg: GetAttrDict):
     """Renames files in dir according to the given config."""
-    stubs = load_stubs(dir, stubs_file)
-    stub_match = prepare_regex_matchers(match_groups, stub_pattern, file_subs)
+    stubs = load_stubs(dir, cfg.stubs_file)
+    stub_match = prepare_regex_matchers(cfg.match_groups, cfg.stub_pattern, cfg.file_subs)
     key_stub_map = extract_stub_keys(stub_match, stubs)
-    renames = scan_dir(dir, file_subs, key_stub_map, mtime)
+    renames = scan_dir(dir, cfg.file_subs, key_stub_map, cfg.mtime)
     if act:
         process_renames_and_mtimes(dir, renames)
 
@@ -424,7 +420,7 @@ def main():
             return 0
 
     profile = extract_profile(cf, opts)
-    return process_dir(opts.dir, act=not opts.no_act, **profile)
+    return process_dir(opts.dir, act=not opts.no_act, cfg=profile)
 
 if __name__ == "__main__":
     sys.exit(main())
