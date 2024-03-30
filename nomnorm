@@ -25,6 +25,8 @@ class Constants:
     # if the file mtime is outside this epsilon, we fix it
     mtime_epsilon_seconds = 2
 
+    # Note this string is split into an f-string part for progname etc,
+    # and a non-f-string with settings and descriptions having many {}.
     default_config: str = f"""\
 # {progname} configuration toml file
 #
@@ -103,20 +105,36 @@ mtime.source = "{key}"
 mtime.strpfmt = "%Y%m%d-%H%M%S"
 """
 
+class ConfigKeyError(KeyError): pass
+
 class GetAttrDict(dict):
-    def __getattr__(self, key): return self[key]
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise ConfigKeyError(
+                f"key '{key}' not found in config {self.get('_context', '<unknown')}")
 
     @staticmethod
-    def attrify(struct: list|dict|Any) -> list|GetAttrDict|Any:
+    def attrify(struct: list|dict|Any, context: str) -> list|GetAttrDict|Any:
         """Walks the given list/dict struct and returns a GetAttrDict-ified one.
 
         The returned struct is identical except all dict-like instances are
         replaced with new shallow copies as GetAttrDict instances.
+
+        Additionally, each GetAttrDict's _context field is filled in automatically
+        with its path starting from the given context argument, allowing
+        attempts to access unknown keys via attributes to include that path
+        in the raised ConfigKeyError.
         """
         if isinstance(struct, dict):
-            return GetAttrDict((k, GetAttrDict.attrify(v)) for k, v in struct.items())
+            return GetAttrDict(
+                ((k, GetAttrDict.attrify(v, context=f"{context}:{k}"))
+                 for k, v in struct.items()),
+                _context=context)
         elif isinstance(struct, list):
-            return [GetAttrDict.attrify(e) for e in struct]
+            return [GetAttrDict.attrify(e, context=f"{context}[{i}]")
+                    for i, e in enumerate(struct)]
         else:
             return struct
 
@@ -147,17 +165,17 @@ class ConfigFile:
     """
     def __init__(self, default: str="") -> None:
         self.default = default
-        self.config: GetAttrDict = GetAttrDict()
+        self.config: GetAttrDict = GetAttrDict(_context='uninitialized')
 
     def load_file(self, path: Path|str) -> None:
         """Loads a config from the path overriding anything in the current config."""
         with open(path, "rb") as f:
-            overrides = GetAttrDict.attrify(tomllib.load(f))
+            overrides = GetAttrDict.attrify(tomllib.load(f), context=str(path))
         self.config = update_recursive(self.config, overrides)
 
     def load_default(self) -> object:
         """Just load the default config, don't mess with the config file"""
-        self.config = GetAttrDict.attrify(tomllib.loads(self.default))
+        self.config = GetAttrDict.attrify(tomllib.loads(self.default), context="<default>")
 
     def regenerate_config(self, path) -> object:
         self.rename_config_to_backup(path)
@@ -365,7 +383,7 @@ def extract_profile(cf: GetAttrDict, opts: argparse.ArgumentParser) -> GetAttrDi
         opts.profile = cf.config.profile
 
     # Extract the selected config profile and override its stubs_file if requested
-    profile = cf.config[opts.profile]
+    profile = getattr(cf.config, opts.profile)
     if opts.stubs_file is not None:
         profile["stubs_file"] = opts.stubs_file
 
