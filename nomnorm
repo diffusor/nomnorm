@@ -24,7 +24,7 @@ import json
 import tomllib
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 class Constants:
@@ -107,8 +107,7 @@ mtime.enable = true
 
 # {}-style format string from which the time will be parsed.
 # This can use the match groups from pat entries in the file_subs list,
-# as long as the group is present across all pat entries in file_subs; and
-# from stub_pattern.  Groups in stub_pattern override those in file_subs.
+# as long as the group is present across all pat entries in file_subs.
 mtime.source = "{key}"
 
 # strftime-style interpolation string for strptime parsing
@@ -204,12 +203,12 @@ class FileInfo:
     source: str
     dest: str
     dest_exists: bool
-    mtime: int|float|None = None
+    source_mtime: int|float
+    dest_mtime: int|float|None
 
 def process_dir(dir: str|Path,
                 act: bool,
                 stubs_file: str,
-                set_file_mtime: bool,
                 stub_pattern: str,
                 file_subs: list[dict[str, str]],
                 mtime: GetAttrDict|None=None,
@@ -249,19 +248,32 @@ def process_dir(dir: str|Path,
     for fname in sorted(os.listdir(dir)):
         # fname is just the basename, dir is not prepended
         # Try to match each file_subs pattern to set up the rename
-        for s in file_subs:
-            if m := s.match(fname):
+        for file_sub in file_subs:
+            if m := file_sub.match(fname):
                 if stub := key_stub_map.get(m['key']):
                     used_keys.add(stub)
-                    newname = m.re.sub(s.rep.format(stub=stub), m.string)
-                    if newname != fname:
-                        renames.append(fileinfo := FileInfo(
-                            source=fname,
-                            dest=newname,
-                            dest_exists=(dir / newname).exists(),
-                            mtime=os.path.getmtime(dir / fname)))
-                        if fileinfo.dest_exists:
-                            conflicts.add(fname)
+                    # Formulate the normalized filename from the stub
+                    newname = m.re.sub(file_sub.rep.format(stub=stub), m.string)
+
+                    # Gather the mtime
+                    dest_mtime = None
+                    if mtime and mtime.enable:
+                        t = datetime.strptime(
+                            mtime.source.format(**m.groupdict()),
+                            mtime.strpfmt)
+                        t = t.replace(tzinfo=timezone.utc)
+                        dest_mtime = t.timestamp()
+
+                    renames.append(fileinfo := FileInfo(
+                        source=fname,
+                        dest=newname,
+                        dest_exists=(dir / newname).exists(),
+                        source_mtime=os.path.getmtime(dir / fname),
+                        dest_mtime=dest_mtime))
+
+                    if fileinfo.dest_exists and newname != fname:
+                        conflicts.add(fname)
+
                     break
         else:
             unmatched_files.append(fname)
