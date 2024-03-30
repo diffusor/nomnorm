@@ -108,6 +108,19 @@ mtime.strpfmt = "%Y%m%d-%H%M%S"
 class ConfigKeyError(KeyError): pass
 
 class ConfigDict(dict):
+    """Class for storing configuration options, allowing easy access via dot notation.
+
+    This makes reasonable sense because config options aren't expected to be arbitrary
+    objects, but rather predefined strings.
+
+    Read accesses to keys in ConfigDict instances should be done via attribute access
+    only, allowing the machinery to print the path to the key if a key is missing in
+    a config file.  This path is tracked through the _context key in each ConfigDict,
+    built via the attrify() method.
+
+    ConfigDict instances created without attrify should init the _context key
+    appropriately to set the root of the context path for error reporting.
+    """
     def __getattr__(self, key):
         try:
             return self[key]
