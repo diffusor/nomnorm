@@ -107,7 +107,7 @@ mtime.strpfmt = "%Y%m%d-%H%M%S"
 
 class ConfigKeyError(KeyError): pass
 
-class GetAttrDict(dict):
+class ConfigDict(dict):
     def __getattr__(self, key):
         try:
             return self[key]
@@ -116,24 +116,24 @@ class GetAttrDict(dict):
                 f"key '{key}' not found in config {self.get('_context', '<unknown')}")
 
     @staticmethod
-    def attrify(struct: list|dict|Any, context: str) -> list|GetAttrDict|Any:
-        """Walks the given list/dict struct and returns a GetAttrDict-ified one.
+    def attrify(struct: list|dict|Any, context: str) -> list|ConfigDict|Any:
+        """Walks the given list/dict struct and returns a ConfigDict-ified one.
 
         The returned struct is identical except all dict-like instances are
-        replaced with new shallow copies as GetAttrDict instances.
+        replaced with new shallow copies as ConfigDict instances.
 
-        Additionally, each GetAttrDict's _context field is filled in automatically
+        Additionally, each ConfigDict's _context field is filled in automatically
         with its path starting from the given context argument, allowing
         attempts to access unknown keys via attributes to include that path
         in the raised ConfigKeyError.
         """
         if isinstance(struct, dict):
-            return GetAttrDict(
-                ((k, GetAttrDict.attrify(v, context=f"{context}:{k}"))
+            return ConfigDict(
+                ((k, ConfigDict.attrify(v, context=f"{context}:{k}"))
                  for k, v in struct.items()),
                 _context=context)
         elif isinstance(struct, list):
-            return [GetAttrDict.attrify(e, context=f"{context}[{i}]")
+            return [ConfigDict.attrify(e, context=f"{context}[{i}]")
                     for i, e in enumerate(struct)]
         else:
             return struct
@@ -161,21 +161,21 @@ class ConfigFile:
     """Class for managing toml configs files.
 
     The loaded config is in the config data member, with all dicts replaced
-    with GetAttrDict instances.
+    with ConfigDict instances.
     """
     def __init__(self, default: str="") -> None:
         self.default = default
-        self.config: GetAttrDict = GetAttrDict(_context='uninitialized')
+        self.config: ConfigDict = ConfigDict(_context='uninitialized')
 
     def load_file(self, path: Path|str) -> None:
         """Loads a config from the path overriding anything in the current config."""
         with open(path, "rb") as f:
-            overrides = GetAttrDict.attrify(tomllib.load(f), context=str(path))
+            overrides = ConfigDict.attrify(tomllib.load(f), context=str(path))
         self.config = update_recursive(self.config, overrides)
 
     def load_default(self) -> object:
         """Just load the default config, don't mess with the config file"""
-        self.config = GetAttrDict.attrify(tomllib.loads(self.default), context="<default>")
+        self.config = ConfigDict.attrify(tomllib.loads(self.default), context="<default>")
 
     def regenerate_config(self, path) -> object:
         self.rename_config_to_backup(path)
@@ -225,7 +225,7 @@ def load_stubs(dir: str|Path, stubs_file: str) -> list[str]:
         return [name for name in (line.strip() for line in f)
                 if name and not name.startswith("#")]
 
-def prepare_regex_matchers(match_groups: GetAttrDict|None,
+def prepare_regex_matchers(match_groups: ConfigDict|None,
                            stub_pattern: str,
                            file_subs: list[dict[str, str]]) -> callable:
     """Processes match_groups to compile the needed regexes.
@@ -259,7 +259,7 @@ def extract_stub_keys(stub_match: callable,
 def scan_dir(dir: Path|str,
              file_subs: list[dict[str, str]],
              key_stub_map: dict[str, str],
-             mtime_config: GetAttrDict) -> list[FileInfo]:
+             mtime_config: ConfigDict) -> list[FileInfo]:
     """Scans the given dir for files to rename and mtime-adjust.
 
     Prints a summary of the changes that will be made,
@@ -353,7 +353,7 @@ def process_renames_and_mtimes(dir: Path|str, renames: list[FileInfo]) -> None:
 
 def process_dir(dir: str|Path,
                 act: bool,
-                cfg: GetAttrDict):
+                cfg: ConfigDict):
     """Renames files in dir according to the given config."""
     stubs = load_stubs(dir, cfg.stubs_file)
     stub_match = prepare_regex_matchers(cfg.match_groups, cfg.stub_pattern, cfg.file_subs)
@@ -362,7 +362,7 @@ def process_dir(dir: str|Path,
     if act:
         process_renames_and_mtimes(dir, renames)
 
-def extract_profile(cf: GetAttrDict, opts: argparse.ArgumentParser) -> GetAttrDict:
+def extract_profile(cf: ConfigDict, opts: argparse.ArgumentParser) -> ConfigDict:
     # Load the main config file
     if not opts.config:
         if Constants.config_file_path.exists():
