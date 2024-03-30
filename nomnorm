@@ -196,45 +196,63 @@ class FileInfo:
     source_mtime: int|float|None = None
     dest_mtime: int|float|None = None
 
-def process_dir(dir: str|Path,
-                act: bool,
-                stubs_file: str,
-                stub_pattern: str,
-                file_subs: list[dict[str, str]],
-                mtime: GetAttrDict|None=None,
-                match_groups: GetAttrDict|None=None):
-    """Renames files in dir according to the given config."""
-    dir = Path(dir)
-    if "/" in stubs_file or "\\" in stubs_file:
-        stubs_file = Path(stubs_file)
-    else:
-        stubs_file = dir / stubs_file
+def load_stubs(dir: str|Path, stubs_file: str) -> list[str]:
+    """Loads the canonical stub names for normalization and returns a list of them.
 
-    with stubs_file.open("r") as f:
-        stubs = [name for name in (line.strip() for line in f)
-                 if name and not name.startswith("#")]
+    Whitespace surrounding each stub name is ignored.
+    Blank lines and lines starting with # (preceded by optional whitespace) are ignored.
+    """
+    has_slash =  "/" in stubs_file or "\\" in stubs_file
+    with open(stubs_file if has_slash else Path(dir)/stubs_file, "r") as f:
+        return [name for name in (line.strip() for line in f)
+                if name and not name.startswith("#")]
 
+def prepare_regex_matchers(match_groups: GetAttrDict|None,
+                           stub_pattern: str,
+                           file_subs: list[dict[str, str]]) -> callable:
+    """Processes match_groups to compile the needed regexes.
+
+    Injects the resulting file_sub matching re.match() functions into the
+    file_subs dicts under keyword 'match', and returns the re.match
+    for matching the file stub names.
+    """
+    match_groups = match_groups or {}
     group_kwargs = {k: f"(?P<{k}>{v})" for k, v in match_groups.items()}
 
     # Compile the regexes
     stub_pat_expanded = stub_pattern.format(**group_kwargs)
-    stub_match = re.compile(stub_pat_expanded).match
     for d in file_subs:
         d['match'] = re.compile(d.pat.format(stub_pattern=stub_pat_expanded,
                                              **group_kwargs)).match
+    return re.compile(stub_pat_expanded).match
 
-    # create the key dict, mapping key to stub
+def extract_stub_keys(stub_match: callable,
+                      stubs: list[str]) -> dict[str, str]:
+    """Extracts the 'key' group from each stub using stub_match.
+    Returns a dict mapping each key to its stub.
+    """
     key_stub_map = {}
     for stub in stubs:
         if m := stub_match(stub):
             key_stub_map[m['key']] = stub
     #for key in sorted(unused_keys): print(" ", key_stub_map[key])
+    return key_stub_map
 
-    # scan the files
+def scan_dir(dir: Path|str,
+             file_subs: list[dict[str, str]],
+             key_stub_map: dict[str, str],
+             mtime_config: GetAttrDict) -> list[FileInfo]:
+    """Scans the given dir for files to rename and mtime-adjust.
+
+    Prints a summary of the changes that will be made,
+    and returns a list of FileInfo objects describing the changes.
+    """
+    dir = Path(dir)
     unmatched_files = []
     used_keys = set()
     renames: list[FileInfo] = []
     conflicts = set()
+    # scan all files in dir
     for fname in sorted(os.listdir(dir)):
         # fname is just the basename, dir is not prepended
         # Try to match each file_subs pattern to set up the rename
@@ -252,12 +270,12 @@ def process_dir(dir: str|Path,
                     ))
 
                     # Gather the mtimes
-                    if mtime and mtime.enable:
+                    if mtime_config and mtime_config.enable:
                         fi.source_mtime=os.path.getmtime(dir / fname)
 
                         t = datetime.strptime(
-                            mtime.source.format(**m.groupdict()),
-                            mtime.strpfmt)
+                            mtime_config.source.format(**m.groupdict()),
+                            mtime_config.strpfmt)
                         t = t.replace(tzinfo=timezone.utc)
                         fi.dest_mtime = t.timestamp()
 
@@ -292,25 +310,43 @@ def process_dir(dir: str|Path,
                   f"{'  [setting mtime]' if fi.set_mtime else ''}")
         #else: print(f"< skipping {fi.source}")
 
-    if act:
-        # Perform renames and mtime adjustments
-        for fi in renames:
-            spath = dir / fi.source
-            dpath = dir / fi.dest
-            if fi.set_mtime:
-                os.utime(spath, times=(time.time(), fi.dest_mtime))
-                print('t', end='')
-                sys.stdout.flush()
-            if fi.source != fi.dest:
-                if fi.dest_exists:
-                    print('X', end='')
-                else:
-                    os.rename(spath, dpath)
-                    print('.', end='')
-                sys.stdout.flush()
-        print()
+    return renames
 
-    print(summary)
+def process_renames_and_mtimes(dir: Path|str, renames: list[FileInfo]) -> None:
+    """Performs the requested renames and mtime adjustments in dir."""
+    dir = Path(dir)
+    for fi in renames:
+        spath = dir / fi.source
+        dpath = dir / fi.dest
+        if fi.set_mtime:
+            os.utime(spath, times=(time.time(), fi.dest_mtime))
+            print('t', end='')
+            sys.stdout.flush()
+        if fi.source != fi.dest:
+            if fi.dest_exists:
+                # TODO import filecmp; filecmp.cmp(spath, dpath, shallow=False)
+                # If returns true, we can perform the rename anyway
+                print('X', end='')
+            else:
+                os.rename(spath, dpath)
+                print('.', end='')
+            sys.stdout.flush()
+    print()
+
+def process_dir(dir: str|Path,
+                act: bool,
+                stubs_file: str,
+                stub_pattern: str,
+                file_subs: list[dict[str, str]],
+                mtime: GetAttrDict|None=None,
+                match_groups: GetAttrDict|None=None):
+    """Renames files in dir according to the given config."""
+    stubs = load_stubs(dir, stubs_file)
+    stub_match = prepare_regex_matchers(match_groups, stub_pattern, file_subs)
+    key_stub_map = extract_stub_keys(stub_match, stubs)
+    renames = scan_dir(dir, file_subs, key_stub_map, mtime)
+    if act:
+        process_renames_and_mtimes(dir, renames)
 
 def extract_profile(cf: GetAttrDict, opts: argparse.ArgumentParser) -> GetAttrDict:
     # Load the main config file
