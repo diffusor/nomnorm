@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import os
 import sys
+import time
 import json
 import tomllib
 import argparse
@@ -191,8 +192,9 @@ class FileInfo:
     source: str
     dest: str
     dest_exists: bool
-    source_mtime: int|float
-    dest_mtime: int|float|None
+    set_mtime: bool = False
+    source_mtime: int|float|None = None
+    dest_mtime: int|float|None = None
 
 def process_dir(dir: str|Path,
                 act: bool,
@@ -243,23 +245,26 @@ def process_dir(dir: str|Path,
                     # Formulate the normalized filename from the stub
                     newname = m.re.sub(file_sub.rep.format(stub=stub), m.string)
 
-                    # Gather the mtime
-                    dest_mtime = None
+                    renames.append(fi := FileInfo(
+                        source=fname,
+                        dest=newname,
+                        dest_exists=(dir / newname).exists(),
+                    ))
+
+                    # Gather the mtimes
                     if mtime and mtime.enable:
+                        fi.source_mtime=os.path.getmtime(dir / fname)
+
                         t = datetime.strptime(
                             mtime.source.format(**m.groupdict()),
                             mtime.strpfmt)
                         t = t.replace(tzinfo=timezone.utc)
-                        dest_mtime = t.timestamp()
+                        fi.dest_mtime = t.timestamp()
 
-                    renames.append(fileinfo := FileInfo(
-                        source=fname,
-                        dest=newname,
-                        dest_exists=(dir / newname).exists(),
-                        source_mtime=os.path.getmtime(dir / fname),
-                        dest_mtime=dest_mtime))
+                        fi.set_mtime = abs(fi.dest_mtime - fi.source_mtime) \
+                                       >= Constants.mtime_epsilon_seconds
 
-                    if fileinfo.dest_exists and newname != fname:
+                    if fi.dest_exists and newname != fname:
                         conflicts.add(fname)
 
                     break
@@ -273,24 +278,37 @@ def process_dir(dir: str|Path,
             print(" ", file)
 
     unused_keys = set(key_stub_map) - used_keys
-    summary = (f"{len(renames)} rename(s), {len(conflicts)} conflict(s),"
-               f" {len(unused_keys)} unused stub(s), {len(unmatched_files)} unmatched file(s)")
+    summary = (f"{len(renames)} file(s), {len(conflicts)} conflict(s),"
+               f" {len(unused_keys)} unused stub(s),"
+               f" {len(unmatched_files)} unmatched file(s)")
     print(summary)
     for fi in renames:
         #msg = "[target exists] " if fi.dest_exists else ""
         #print(f"{msg}{old}  ->  {new}")
-        set_mtime = fi.dest_mtime \
-            and abs(fi.dest_mtime - fi.source_mtime) \
-                >= Constants.mtime_epsilon_seconds
         eq = fi.source == fi.dest
-        if set_mtime or not eq:
-            print(f"{fi.source}{'' if eq else f' -> {fi.dest}'}{'  [setting mtime]' if set_mtime else ''}")
+        if fi.set_mtime or not eq:
+            print(f"{fi.source}"
+                  f"""{'' if eq else f' {"XX" if fi.dest_exists else "->"} {fi.dest}'}"""
+                  f"{'  [setting mtime]' if fi.set_mtime else ''}")
         #else: print(f"< skipping {fi.source}")
 
     if act:
         # Perform renames and mtime adjustments
-        # os.utime(path, times=(atime=time.time(), mtime=strptime(key, timefmt)))
-        pass
+        for fi in renames:
+            spath = dir / fi.source
+            dpath = dir / fi.dest
+            if fi.set_mtime:
+                os.utime(spath, times=(time.time(), fi.dest_mtime))
+                print('t', end='')
+                sys.stdout.flush()
+            if fi.source != fi.dest:
+                if fi.dest_exists:
+                    print('X', end='')
+                else:
+                    os.rename(spath, dpath)
+                    print('.', end='')
+                sys.stdout.flush()
+        print()
 
     print(summary)
 
