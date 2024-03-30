@@ -3,18 +3,6 @@
 
 Renames files in a directory according to a file of canonical file name stubs."""
 
-# TODO mtime setting, actual renaming, prompt user to continue
-# os.utime(path, times=(atime=time.time(), mtime=strptime(key, timefmt)))
-# os.path.getmtime(path) -> float seconds
-#
-# t = datetime.datetime.strptime("20200830-195934", "%Y%m%d-%H%M%S")
-# utc = t.replace(tzinfo=datetime.timezone.utc)
-# utc.timestamp()
-#
-# Check that it's within 3 seconds - if so, no need to set it.
-# Create dataclass for the file update operations needed.
-# Need new config option for time format parsing via strptime
-
 from __future__ import annotations
 
 import re
@@ -34,7 +22,7 @@ class Constants:
     config_file_path = Path.home() / ".config" / progname / config_file
     dir_config = f".{config_file}"
     # if the file mtime is outside this epsilon, we fix it
-    mtime_epsilon_seconds = 3
+    mtime_epsilon_seconds = 2
 
     default_config: str = f"""\
 # {progname} configuration toml file
@@ -288,12 +276,20 @@ def process_dir(dir: str|Path,
     summary = (f"{len(renames)} rename(s), {len(conflicts)} conflict(s),"
                f" {len(unused_keys)} unused stub(s), {len(unmatched_files)} unmatched file(s)")
     print(summary)
-    for fileinfo in renames:
-        #msg = "[target exists] " if fileinfo.dest_exists else ""
+    for fi in renames:
+        #msg = "[target exists] " if fi.dest_exists else ""
         #print(f"{msg}{old}  ->  {new}")
-        print(fileinfo)
+        set_mtime = fi.dest_mtime \
+            and abs(fi.dest_mtime - fi.source_mtime) \
+                >= Constants.mtime_epsilon_seconds
+        eq = fi.source == fi.dest
+        if set_mtime or not eq:
+            print(f"{fi.source}{'' if eq else f' -> {fi.dest}'}{'  [setting mtime]' if set_mtime else ''}")
+        #else: print(f"< skipping {fi.source}")
 
     if act:
+        # Perform renames and mtime adjustments
+        # os.utime(path, times=(atime=time.time(), mtime=strptime(key, timefmt)))
         pass
 
     print(summary)
