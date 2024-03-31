@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import json
+import hashlib
 import filecmp
 import tomllib
 import argparse
@@ -230,6 +231,7 @@ class FileInfo:
     set_mtime: bool = False
     source_mtime: int|float|None = None
     target_mtime: int|float|None = None
+    sha256: str|None = None
 
 def load_stubs(dir: str|Path, stubs_file: str) -> list[str]:
     """Loads the canonical stub names for normalization and returns a list of them.
@@ -333,7 +335,8 @@ def scan_dir(dir: Path|str,
 
     unused_keys = set(key_stub_map) - used_keys
     summary = (f"{len(renames)} file(s),"
-               f" {len([k for k, v in dest_fi_map.items() if v])} dest name conflict(s),"
+               f" {len([k for k, v in dest_fi_map.items() if len(v) > 1])}"
+               f" dest name conflict(s),"
                f" {len(existing_conflicts)} existing dest conflict(s),"
                f" {len(unused_keys)} unused stub(s),"
                f" {len(unmatched_files)} unmatched file(s)")
@@ -348,7 +351,37 @@ def scan_dir(dir: Path|str,
                   f"{'  [setting mtime]' if fi.set_mtime else ''}")
         #else: print(f"< skipping {fi.source}")
 
+    # Process future potential conflicts via hashlib
+    def sha256(name):
+        with open(dir / name, 'rb') as f:
+            return hashlib.file_digest(f, 'sha256').hexdigest()
+
+    # Gather shas for any foreseeable conflict
+    should_abort = False
+    for dest, fileinfos in dest_fi_map.items():
+        if len(fileinfos) > 1 or fileinfos[0].dest_exists:
+            # Rename conflicts exist for this dest; check hashes of all
+            shamap: dict[str, list(FileInfo|str)] = {
+                sha256(dest): [FileInfo(source=dest, dest=dest, dest_exists=True)]
+            }
+            for fi in fileinfos:
+                assert fi.dest == dest
+                fi.sha256 = sha256(fi.source)
+                shamap.setdefault(fi.sha256, []).append(fi)
+            # Process the dict of sha(s)
+            if len(shamap) > 1:
+                # we have mismatching contents!
+                should_abort = True
+                print(f"Dest conflict: {dest}")
+                for sha, fis in shamap.items():
+                    print(f"> {sha[:5]}... ({os.path.getsize(dir / fis[0].source)}):",
+                          *(fi.source for fi in fis))
+    if should_abort:
+        print(f"error: Renames exist between files with mismatching contents; aborting")
+        sys.exit(1)
+
     return renames
+
 
 def process_renames_and_mtimes(dir: Path|str, renames: list[FileInfo]) -> None:
     """Performs the requested renames and mtime adjustments in dir.
