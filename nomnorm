@@ -231,7 +231,6 @@ class FileInfo:
     set_mtime: bool = False
     source_mtime: int|float|None = None
     target_mtime: int|float|None = None
-    sha256: str|None = None
 
 def load_stubs(dir: str|Path, stubs_file: str) -> list[str]:
     """Loads the canonical stub names for normalization and returns a list of them.
@@ -361,21 +360,21 @@ def scan_dir(dir: Path|str,
     for dest, fileinfos in dest_fi_map.items():
         if len(fileinfos) > 1 or fileinfos[0].dest_exists:
             # Rename conflicts exist for this dest; check hashes of all
-            shamap: dict[str, list(FileInfo|str)] = {
-                sha256(dest): [FileInfo(source=dest, dest=dest, dest_exists=True)]
-            }
+            shamap: dict[str, set[str]] = { sha256(dest): set((dest, )) }
             for fi in fileinfos:
                 assert fi.dest == dest
-                fi.sha256 = sha256(fi.source)
-                shamap.setdefault(fi.sha256, []).append(fi)
+                shamap.setdefault(sha256(fi.source), set()).add(fi.source)
             # Process the dict of sha(s)
             if len(shamap) > 1:
                 # we have mismatching contents!
                 should_abort = True
-                print(f"Dest conflict: {dest}")
-                for sha, fis in shamap.items():
-                    print(f"> {sha[:5]}... ({os.path.getsize(dir / fis[0].source)}):",
-                          *(fi.source for fi in fis))
+                print(f"\nConflict: Multiple distinct files would map to '{dest}'")
+                for sha, names in shamap.items():
+                    for name in names: break  # get a name for getsize-ing
+                    size = os.path.getsize(dir / name)
+                    print(f"* {sha} {size:14,} bytes:")
+                    for name in sorted(names):
+                        print(f"  > {name}")
     if should_abort:
         print(f"error: Renames exist between files with mismatching contents; aborting")
         sys.exit(1)
