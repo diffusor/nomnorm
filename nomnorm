@@ -110,7 +110,8 @@ mtime.source = "{key}"
 mtime.strpfmt = "%Y%m%d-%H%M%S"
 """
 
-class ConfigKeyError(KeyError): pass
+class NomnormConfigKeyError(KeyError): pass
+class NomnormConflictError(KeyError): pass
 
 class ConfigDict(dict):
     """Class for storing configuration options, allowing easy access via dot notation.
@@ -130,7 +131,7 @@ class ConfigDict(dict):
         try:
             return self[key]
         except KeyError:
-            raise ConfigKeyError(
+            raise NomnormConfigKeyError(
                 f"key '{key}' not found in config {self.get('_context', '<unknown')}")
 
     @staticmethod
@@ -143,7 +144,7 @@ class ConfigDict(dict):
         Additionally, each ConfigDict's _context field is filled in automatically
         with its path starting from the given context argument, allowing
         attempts to access unknown keys via attributes to include that path
-        in the raised ConfigKeyError.
+        in the raised NomnormConfigKeyError.
         """
         if isinstance(struct, dict):
             return ConfigDict(
@@ -350,8 +351,16 @@ def scan_dir(dir: Path|str,
                   f"{'  [setting mtime]' if fi.set_mtime else ''}")
         #else: print(f"< skipping {fi.source}")
 
-    # Process future potential conflicts via hashlib
+    check_for_conflicts(dir, dest_fi_map)
+    return renames
+
+def check_for_conflicts(dir: Path, dest_fi_map: dict[str, list[FileInfo]]) -> None:
+    """Searches for conflicting file contents for each set of renames.
+
+    If conflicts are found, they are all printed, and an exception is raised.
+    """
     def sha256(name):
+        """Returns the sha256 of the contents of the file at dir/name"""
         with open(dir / name, 'rb') as f:
             return hashlib.file_digest(f, 'sha256').hexdigest()
 
@@ -379,14 +388,11 @@ def scan_dir(dir: Path|str,
                     size = os.path.getsize(dir / name)
                     print(f"* {sha} {size:14,} bytes:")
                     for name in sorted(names):
-                        print(f"  > {name}{' (target)' if name == dest else ''}")
+                        print(f"  > {name}{' (target)'}")
 
     if should_abort:
-        print(f"error: Renames exist between files with mismatching contents; aborting")
-        sys.exit(1)
-
-    return renames
-
+        raise NomnormConflictError(
+            "error: Renames exist between files with mismatching contents")
 
 def process_renames_and_mtimes(dir: Path|str, renames: list[FileInfo]) -> None:
     """Performs the requested renames and mtime adjustments in dir.
