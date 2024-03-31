@@ -2,6 +2,9 @@
 """Normalize names of files.
 
 Renames files in a directory according to a file of canonical file name stubs."""
+# TODO - catch multiple source files mapping to the same dest file (dict dest->FileInfo)
+# TODO - use shutil term width to print better rename summary
+# TODO - compare files when a source file would overwrite a dest file
 
 from __future__ import annotations
 
@@ -10,6 +13,7 @@ import os
 import sys
 import time
 import json
+import filecmp
 import tomllib
 import argparse
 from pathlib import Path
@@ -225,7 +229,7 @@ class FileInfo:
     dest_exists: bool
     set_mtime: bool = False
     source_mtime: int|float|None = None
-    dest_mtime: int|float|None = None
+    target_mtime: int|float|None = None
 
 def load_stubs(dir: str|Path, stubs_file: str) -> list[str]:
     """Loads the canonical stub names for normalization and returns a list of them.
@@ -282,7 +286,8 @@ def scan_dir(dir: Path|str,
     unmatched_files = []
     used_keys = set()
     renames: list[FileInfo] = []
-    conflicts = set()
+    existing_conflicts = set()
+    dest_fi_map: dict[str, list(FileInfo)] = {} # for tracking destination conflicts
     # scan all files in dir
     for fname in sorted(os.listdir(dir)):
         # fname is just the basename, dir is not prepended
@@ -299,22 +304,22 @@ def scan_dir(dir: Path|str,
                         dest=newname,
                         dest_exists=(dir / newname).exists(),
                     ))
+                    dest_fi_map.setdefault(newname, []).append(fi)
 
                     # Gather the mtimes
                     if mtime_config and mtime_config.enable:
-                        fi.source_mtime=os.path.getmtime(dir / fname)
-
                         t = datetime.strptime(
                             mtime_config.source.format(**m.groupdict()),
                             mtime_config.strpfmt)
                         t = t.replace(tzinfo=timezone.utc)
-                        fi.dest_mtime = t.timestamp()
+                        fi.target_mtime = t.timestamp()
 
-                        fi.set_mtime = abs(fi.dest_mtime - fi.source_mtime) \
+                        fi.source_mtime=os.path.getmtime(dir / fname)
+                        fi.set_mtime = abs(fi.target_mtime - fi.source_mtime) \
                                        >= Constants.mtime_epsilon_seconds
 
                     if fi.dest_exists and newname != fname:
-                        conflicts.add(fname)
+                        existing_conflicts.add(fname)
 
                     break
         else:
@@ -327,7 +332,9 @@ def scan_dir(dir: Path|str,
             print(" ", file)
 
     unused_keys = set(key_stub_map) - used_keys
-    summary = (f"{len(renames)} file(s), {len(conflicts)} conflict(s),"
+    summary = (f"{len(renames)} file(s),"
+               f" {len([k for k, v in dest_fi_map.items() if v])} dest name conflict(s),"
+               f" {len(existing_conflicts)} existing dest conflict(s),"
                f" {len(unused_keys)} unused stub(s),"
                f" {len(unmatched_files)} unmatched file(s)")
     print(summary)
@@ -344,25 +351,51 @@ def scan_dir(dir: Path|str,
     return renames
 
 def process_renames_and_mtimes(dir: Path|str, renames: list[FileInfo]) -> None:
-    """Performs the requested renames and mtime adjustments in dir."""
+    """Performs the requested renames and mtime adjustments in dir.
+
+    Prints a character representing each file processed:
+     . - file renamed
+     X - file deleted due to identical contents
+     s - renamed skipped due to destination file existing with different contents
+     T - mtime updated
+     t - mtime update was planned, but dest already existed with the correct mtime
+    """
     dir = Path(dir)
+    skipped = []
     for fi in renames:
         spath = dir / fi.source
         dpath = dir / fi.dest
-        if fi.set_mtime:
-            os.utime(spath, times=(time.time(), fi.dest_mtime))
-            print('t', end='')
-            sys.stdout.flush()
+
         if fi.source != fi.dest:
             if fi.dest_exists:
-                # TODO import filecmp; filecmp.cmp(spath, dpath, shallow=False)
-                # If returns true, we can perform the rename anyway
-                print('X', end='')
+                if filecmp.cmp(spath, dpath, shallow=False):
+                    # Contents match, delete the source instead of renaming it
+                    os.remove(spath)
+                    print('X', end='')
+                else:
+                    skipped.append(fi)
+                    print('s', end='')
             else:
                 os.rename(spath, dpath)
                 print('.', end='')
             sys.stdout.flush()
+
+        really_set_mtime = abs(fi.target_mtime - os.path.getmtime(dpath)) \
+                           >= Constants.mtime_epsilon_seconds
+        if really_set_mtime:
+            os.utime(dpath, times=(time.time(), fi.target_mtime))
+            print('T', end='')
+            sys.stdout.flush()
+        elif fi.set_mtime:
+            print('t', end='')
+            sys.stdout.flush()
+
     print()
+    if skipped:
+        print(f"\n*** WARNING: {len(skipped)} file(s) would have overwritten"
+              f" their destination but have different contents! ***")
+    for fi in skipped:
+        print(f"* '{fi.source}' != '{fi.dest}'")
 
 def process_dir(dir: str|Path,
                 act: bool,
