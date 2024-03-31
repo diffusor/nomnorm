@@ -355,16 +355,21 @@ def scan_dir(dir: Path|str,
         with open(dir / name, 'rb') as f:
             return hashlib.file_digest(f, 'sha256').hexdigest()
 
-    # Gather shas for any foreseeable conflict
+    # Gather sha256s for any foreseeable conflict
     should_abort = False
     for dest, fileinfos in dest_fi_map.items():
         if len(fileinfos) > 1 or fileinfos[0].dest_exists:
             # Rename conflicts exist for this dest; check hashes of all
-            shamap: dict[str, set[str]] = { sha256(dest): set((dest, )) }
+            shamap: dict[str, set[str]] = {}
+            if fileinfos[0].dest_exists:
+                shamap.setdefault(sha256(dest), set()).add(dest)
+
             for fi in fileinfos:
                 assert fi.dest == dest
-                shamap.setdefault(sha256(fi.source), set()).add(fi.source)
-            # Process the dict of sha(s)
+                if fi.source != dest:
+                    shamap.setdefault(sha256(fi.source), set()).add(fi.source)
+
+            # Summarize the dict of sha(s)
             if len(shamap) > 1:
                 # we have mismatching contents!
                 should_abort = True
@@ -374,7 +379,8 @@ def scan_dir(dir: Path|str,
                     size = os.path.getsize(dir / name)
                     print(f"* {sha} {size:14,} bytes:")
                     for name in sorted(names):
-                        print(f"  > {name}")
+                        print(f"  > {name}{' (target)' if name == dest else ''}")
+
     if should_abort:
         print(f"error: Renames exist between files with mismatching contents; aborting")
         sys.exit(1)
