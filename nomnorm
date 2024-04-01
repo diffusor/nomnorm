@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 class Constants:
     progname = "nomnorm"
-    version = "1.1"
+    version = "1.2"
     config_file = f"{progname}.config.toml"
     config_file_path = Path.home() / ".config" / progname / config_file
     dir_config = f".{config_file}"
@@ -338,7 +338,7 @@ def scan_dir(dir: Path|str,
                f" {len(unmatched_stubs)} unmatched stub(s),"
                f" {len(unmatched_files)} unmatched file(s)")
     print(summary)
-    for stub in unmatched_stubs:
+    for stub in sorted(unmatched_stubs):
         print(f" - Unmatched stub: {stub}")
     for fi in renames:
         #msg = "[target exists] " if fi.dest_exists else ""
