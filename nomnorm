@@ -2,9 +2,7 @@
 """Normalize names of files.
 
 Renames files in a directory according to a file of canonical file name stubs."""
-# TODO - catch multiple source files mapping to the same dest file (dict dest->FileInfo)
 # TODO - use shutil term width to print better rename summary
-# TODO - compare files when a source file would overwrite a dest file
 
 from __future__ import annotations
 
@@ -23,7 +21,7 @@ from dataclasses import dataclass
 
 class Constants:
     progname = "nomnorm"
-    version = "0.2"
+    version = "1.0"
     config_file = f"{progname}.config.toml"
     config_file_path = Path.home() / ".config" / progname / config_file
     dir_config = f".{config_file}"
@@ -512,12 +510,18 @@ def process_command_line() -> argparse.Namespace:
     parser.add_argument('-w', '--write-config', action='store_true',
                         help=f"""write the default config contents to the selected
                         --config file, which may be the default, and exit""")
+    parser.add_argument('-V', '--version', action='store_true',
+                        help=f"print the version number of {Constants.progname} and exit")
     return parser.parse_args()
 
 def main():
     #config = ConfigFile.regenerate_config()
     opts = process_command_line()
     cf = ConfigFile(default=Constants.default_config)
+
+    if opts.version:
+        print(f"{Constants.progname} {Constants.version}")
+        return 0
 
     if opts.write_config:
         cfile = opts.config or Constants.config_file_path
