@@ -270,7 +270,6 @@ def extract_stub_keys(stub_match: callable,
     for stub in stubs:
         if m := stub_match(stub):
             key_stub_map[m['key']] = stub
-    #for key in sorted(unused_keys): print(" ", key_stub_map[key])
     return key_stub_map
 
 def scan_dir(dir: Path|str,
@@ -284,7 +283,7 @@ def scan_dir(dir: Path|str,
     """
     dir = Path(dir)
     unmatched_files = []
-    used_keys = set()
+    used_stubs = set()
     renames: list[FileInfo] = []
     existing_conflicts = set()
     dest_fi_map: dict[str, list(FileInfo)] = {} # for tracking destination conflicts
@@ -295,7 +294,7 @@ def scan_dir(dir: Path|str,
         for file_sub in file_subs:
             if m := file_sub.match(fname):
                 if stub := key_stub_map.get(m['key']):
-                    used_keys.add(stub)
+                    used_stubs.add(stub)
                     # Formulate the normalized filename from the stub
                     newname = m.re.sub(file_sub.rep.format(stub=stub), m.string)
 
@@ -331,14 +330,16 @@ def scan_dir(dir: Path|str,
         for file in unmatched_files:
             print(" ", file)
 
-    unused_keys = set(key_stub_map) - used_keys
+    unmatched_stubs = set(key_stub_map.values()) - used_stubs
     summary = (f"{len(renames)} file(s),"
                f" {len([k for k, v in dest_fi_map.items() if len(v) > 1])}"
                f" dest name conflict(s),"
                f" {len(existing_conflicts)} existing dest conflict(s),"
-               f" {len(unused_keys)} unused stub(s),"
+               f" {len(unmatched_stubs)} unmatched stub(s),"
                f" {len(unmatched_files)} unmatched file(s)")
     print(summary)
+    for stub in unmatched_stubs:
+        print(f" - Unmatched stub: {stub}")
     for fi in renames:
         #msg = "[target exists] " if fi.dest_exists else ""
         #print(f"{msg}{old}  ->  {new}")
