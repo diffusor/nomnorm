@@ -367,7 +367,8 @@ def check_for_conflicts(dir: Path, dest_fi_map: dict[str, list[FileInfo]]) -> No
     # Gather sha256s for any foreseeable conflict
     should_abort = False
     for dest, fileinfos in dest_fi_map.items():
-        if len(fileinfos) > 1 or fileinfos[0].dest_exists:
+        fi0 = fileinfos[0]
+        if len(fileinfos) > 1 or (fi0.dest_exists and fi0.source != fi0.dest):
             # Rename conflicts exist for this dest; check hashes of all
             shamap: dict[str, set[str]] = {}
             if fileinfos[0].dest_exists:
