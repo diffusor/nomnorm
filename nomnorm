@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 class Constants:
     progname = "nomnorm"
-    version = "1.0"
+    version = "1.1"
     config_file = f"{progname}.config.toml"
     config_file_path = Path.home() / ".config" / progname / config_file
     dir_config = f".{config_file}"
